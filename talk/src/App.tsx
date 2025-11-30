@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Radar,
   RadarChart,
@@ -44,7 +44,7 @@ const SITUATIONS: Situation[] = [
   },
 ];
 
-// 会話ログ1件ぶんの型（追加）
+// 会話ログ1件ぶんの型
 type TalkMessage = {
   id: number;
   sender: "user" | "system"; // ひとまず user と system だけ
@@ -62,38 +62,69 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 会話ログ（追加）
+  // 会話ログ
   const [messages, setMessages] = useState<TalkMessage[]>([]);
   const [nextId, setNextId] = useState(1); // ログ用の連番ID
 
   const [selectedSituation, setSelectedSituation] = useState<Situation | null>(
     null
   );
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
+
+  // Enterキーで送信するためのハンドラ
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      if (!loading && text.trim()) {
+        sendText();
+      }
+    }
+  };
 
   // 「送信する」押下時の処理
-  const sendText = async () => {
+  // → 解析はせず、会話ログに積むだけ
+  const sendText = () => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    setLoading(true);
-    setError(null);
-
-    // まず「ユーザーの発言」をログに追加
     const userMessage: TalkMessage = {
       id: nextId,
       sender: "user",
       text: trimmed,
     };
+
     setMessages((prev) => [...prev, userMessage]);
     setNextId((id) => id + 1);
+    setText(""); // 入力欄は都度クリア
+  };
+
+  // 「この会話を診断する」押下時の処理
+  // → 会話全体（user発言）をまとめてバックエンドに送る
+  const analyzeConversation = async () => {
+    if (messages.length === 0) return;
+
+    setLoading(true);
+    setError(null);
 
     try {
+      // ひとまず user 発言のみを連結して送る
+      const joinedText = messages
+        .filter((m) => m.sender === "user")
+        .map((m) => m.text)
+        .join("\n");
+
       const res = await fetch("http://127.0.0.1:8000/analyze", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ text: trimmed }),
+        body: JSON.stringify({ text: joinedText }),
       });
 
       if (!res.ok) {
@@ -106,14 +137,14 @@ function App() {
       setScores(data.scores);
       setComment(data.comment ?? "");
 
-      // 解析結果もログとして追加（簡易版の文言でOK）
+      // 診断コメントを system メッセージとしてログの末尾に追加
       const systemMessage: TalkMessage = {
-        id: nextId + 1,
+        id: nextId,
         sender: "system",
         text: data.comment ?? "解析コメント（仮）",
       };
       setMessages((prev) => [...prev, systemMessage]);
-      setNextId((id) => id + 2);
+      setNextId((id) => id + 1);
     } catch (e: any) {
       console.error(e);
       setError("通信に失敗しました");
@@ -121,10 +152,9 @@ function App() {
       setComment("");
     } finally {
       setLoading(false);
-      // 毎回入力欄をクリアしたいならここで空文字をセット
-      // setText("");
     }
   };
+
   // シチュエーションがまだ選ばれていない場合は「シチュ選択画面」だけを表示
   if (!selectedSituation) {
     return (
@@ -194,6 +224,7 @@ function App() {
       </div>
     );
   }
+
   return (
     <div
       style={{
@@ -218,7 +249,7 @@ function App() {
             color: "#1f2933",
           }}
         >
-          MindTalk Frontend
+          MindTalk
         </h1>
 
         <div
@@ -238,13 +269,14 @@ function App() {
 
           <button
             onClick={() => {
-              // シチュ選び直し。会話や結果も一旦リセットしておく
+              // シチュ選び直し。会話や結果も一旦リセット
               setSelectedSituation(null);
               setText("");
               setScores(null);
               setComment("");
               setMessages([]);
               setError(null);
+              setNextId(1);
             }}
             style={{
               marginLeft: "auto",
@@ -259,7 +291,124 @@ function App() {
             シチュを選び直す
           </button>
         </div>
+        {/* 会話ログ */}
+        <div
+          style={{
+            marginTop: "24px",
+            backgroundColor: "#ffffff",
+            borderRadius: "12px",
+            padding: "16px",
+            boxShadow: "0 4px 12px rgba(15,23,42,0.06)",
+            maxHeight: "280px",
+            overflowY: "auto",
+          }}
+        >
+          <p
+            style={{
+              fontSize: "14px",
+              fontWeight: 600,
+              marginBottom: "8px",
+            }}
+          >
+            会話ログ
+          </p>
+          {messages.length === 0 && (
+            <p style={{ fontSize: "12px", color: "#64748b" }}>
+              まだ会話はありません。入力して「送信する」を押すとここに履歴が残ります。
+            </p>
+          )}
+          {messages.map((m) => {
+            const isUser = m.sender === "user";
+            return (
+              <div
+                key={m.id}
+                style={{
+                  marginBottom: "10px",
+                  display: "flex",
+                  justifyContent: isUser ? "flex-end" : "flex-start",
+                  gap: "8px",
+                }}
+              >
+                {/* 左側アイコン（システム） */}
+                {!isUser && (
+                  <div
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: "999px",
+                      backgroundColor: "#e5e7eb",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "12px",
+                      color: "#4b5563",
+                      flexShrink: 0,
+                    }}
+                  >
+                    AI
+                  </div>
+                )}
 
+                {/* 吹き出し本体 */}
+                <div
+                  style={{
+                    maxWidth: "70%",
+                    textAlign: "left",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: isUser ? "flex-end" : "flex-start",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#9ca3af",
+                      marginBottom: "2px",
+                    }}
+                  >
+                    {isUser ? "あなた" : "システム"}
+                  </span>
+                  <div
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: isUser
+                        ? "18px 18px 4px 18px"
+                        : "18px 18px 18px 4px",
+                      backgroundColor: isUser ? "#2563eb" : "#e5e7eb",
+                      color: isUser ? "white" : "#111827",
+                      fontSize: "13px",
+                      lineHeight: 1.5,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {m.text}
+                  </div>
+                </div>
+
+                {/* 右側アイコン（あなた） */}
+                {isUser && (
+                  <div
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: "999px",
+                      backgroundColor: "#bfdbfe",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "12px",
+                      color: "#1d4ed8",
+                      flexShrink: 0,
+                    }}
+                  >
+                    あ
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef} />
+        </div>
         <div
           style={{
             display: "flex",
@@ -278,30 +427,38 @@ function App() {
             >
               会話入力:
             </p>
-            <textarea
-              rows={5}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="話した内容、もしくは想定のセリフをここに入力..."
-              style={{
-                width: "100%",
-                resize: "vertical",
-                padding: "12px",
-                borderRadius: "12px",
-                border: "1px solid #cbd2e1",
-                fontSize: "14px",
-                lineHeight: 1.6,
-                boxSizing: "border-box",
-                backgroundColor: "white",
-              }}
-            />
 
-            <div style={{ marginTop: "16px" }}>
+            {/* 1行入力バー＋送信ボタン */}
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                alignItems: "center",
+              }}
+            >
+              <input
+                type="text"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="話した内容、もしくは想定のセリフをここに入力..."
+                style={{
+                  flex: 1,
+                  padding: "10px 14px",
+                  borderRadius: "999px",
+                  border: "1px solid #cbd2e1",
+                  fontSize: "14px",
+                  lineHeight: 1.5,
+                  boxSizing: "border-box",
+                  backgroundColor: "white",
+                }}
+              />
+
               <button
                 onClick={sendText}
                 disabled={loading || !text.trim()}
                 style={{
-                  padding: "8px 22px",
+                  padding: "10px 20px",
                   borderRadius: "999px",
                   border: "none",
                   backgroundColor:
@@ -311,136 +468,109 @@ function App() {
                   fontWeight: 600,
                   cursor: loading || !text.trim() ? "not-allowed" : "pointer",
                   boxShadow: "0 6px 16px rgba(41,98,255,0.25)",
-                  transition: "transform 0.1s ease, boxShadow 0.1s ease",
+                  whiteSpace: "nowrap",
                 }}
               >
-                {loading ? "解析中..." : "送信する"}
+                {loading ? "送信中..." : "送信"}
+              </button>
+              <button
+                onClick={analyzeConversation}
+                disabled={loading || messages.length === 0}
+                style={{
+                  padding: "10px 20px",
+                  borderRadius: "999px",
+                  border: "2px solid #111827",
+                  backgroundColor: "white",
+                  color: "#111827",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor:
+                    loading || messages.length === 0
+                      ? "not-allowed"
+                      : "pointer",
+                  whiteSpace: "nowrap",
+                  opacity: loading || messages.length === 0 ? 0.5 : 1,
+                }}
+              >
+                この会話を診断する
               </button>
             </div>
 
-            {/* 会話ログ */}
-            <div
-              style={{
-                marginTop: "24px",
-                backgroundColor: "#ffffff",
-                borderRadius: "12px",
-                padding: "16px",
-                boxShadow: "0 4px 12px rgba(15,23,42,0.06)",
-                maxHeight: "280px",
-                overflowY: "auto",
-              }}
-            >
+            {/* レーダーチャート＋コメント */}
+            <div style={{ flex: 1 }}>
               <p
                 style={{
-                  fontSize: "14px",
+                  fontSize: "16px",
                   fontWeight: 600,
                   marginBottom: "8px",
+                  color: "#1f2933",
                 }}
               >
-                会話ログ
+                分析結果:
               </p>
-              {messages.length === 0 && (
-                <p style={{ fontSize: "12px", color: "#64748b" }}>
-                  まだ会話はありません。入力して「送信する」を押すとここに履歴が残ります。
+
+              {!scores && !error && (
+                <p style={{ color: "#64748b", fontSize: "13px" }}>
+                  左側で会話をいくつか送信したあと、「この会話を診断する」を押すと、
+                  ここにレーダーチャートとコメントが表示されます。
                 </p>
               )}
-              {messages.map((m) => (
+
+              {error && (
+                <p style={{ color: "#e53935", fontSize: "13px" }}>{error}</p>
+              )}
+
+              {scores && (
                 <div
-                  key={m.id}
                   style={{
-                    marginBottom: "8px",
-                    textAlign: m.sender === "user" ? "right" : "left",
+                    backgroundColor: "white",
+                    borderRadius: "16px",
+                    padding: "20px",
+                    boxShadow: "0 10px 30px rgba(15,23,42,0.08)",
                   }}
                 >
-                  <span
-                    style={{
-                      display: "inline-block",
-                      padding: "6px 10px",
-                      borderRadius: "12px",
-                      backgroundColor:
-                        m.sender === "user" ? "#dbeafe" : "#e5e7eb",
-                      fontSize: "12px",
-                    }}
-                  >
-                    {m.sender === "user" ? "あなた: " : "システム: "}
-                    {m.text}
-                  </span>
+                  <div style={{ width: "100%", height: 320 }}>
+                    <ResponsiveContainer>
+                      <RadarChart data={scores}>
+                        <PolarGrid stroke="#e5e9f0" />
+                        <PolarAngleAxis
+                          dataKey="label"
+                          tick={{ fontSize: 12 }}
+                        />
+                        <PolarRadiusAxis
+                          angle={90}
+                          domain={[0, 5]}
+                          tick={{ fontSize: 11 }}
+                          tickCount={6}
+                        />
+                        <Radar
+                          name="スコア"
+                          dataKey="score"
+                          stroke="#2962ff"
+                          fill="#2962ff"
+                          fillOpacity={0.4}
+                        />
+                      </RadarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div style={{ marginTop: "12px" }}>
+                    <p
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 600,
+                        marginBottom: "4px",
+                      }}
+                    >
+                      コメント:
+                    </p>
+                    <p style={{ fontSize: "13px", color: "#374151" }}>
+                      {comment || "コメントはまだありません。"}
+                    </p>
+                  </div>
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-
-          {/* 右側：レーダーチャート＋コメント */}
-          <div style={{ flex: 1 }}>
-            <p
-              style={{
-                fontSize: "16px",
-                fontWeight: 600,
-                marginBottom: "8px",
-                color: "#1f2933",
-              }}
-            >
-              分析結果:
-            </p>
-
-            {!scores && !error && (
-              <p style={{ color: "#64748b", fontSize: "13px" }}>
-                テキストを入力して「送信する」を押すと、ここにレーダーチャートと
-                コメントが表示されます。
-              </p>
-            )}
-
-            {error && (
-              <p style={{ color: "#e53935", fontSize: "13px" }}>{error}</p>
-            )}
-
-            {scores && (
-              <div
-                style={{
-                  backgroundColor: "white",
-                  borderRadius: "16px",
-                  padding: "20px",
-                  boxShadow: "0 10px 30px rgba(15,23,42,0.08)",
-                }}
-              >
-                <div style={{ width: "100%", height: 320 }}>
-                  <ResponsiveContainer>
-                    <RadarChart data={scores}>
-                      <PolarGrid stroke="#e5e9f0" />
-                      <PolarAngleAxis dataKey="label" tick={{ fontSize: 12 }} />
-                      <PolarRadiusAxis
-                        angle={90}
-                        domain={[0, 5]}
-                        tick={{ fontSize: 11 }}
-                        tickCount={6}
-                      />
-                      <Radar
-                        name="スコア"
-                        dataKey="score"
-                        stroke="#2962ff"
-                        fill="#2962ff"
-                        fillOpacity={0.4}
-                      />
-                    </RadarChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div style={{ marginTop: "12px" }}>
-                  <p
-                    style={{
-                      fontSize: "13px",
-                      fontWeight: 600,
-                      marginBottom: "4px",
-                    }}
-                  >
-                    コメント:
-                  </p>
-                  <p style={{ fontSize: "13px", color: "#374151" }}>
-                    {comment || "コメントはまだありません。"}
-                  </p>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </div>
